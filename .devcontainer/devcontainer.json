@@ -1,0 +1,14 @@
+{
+    "image": "ubuntu",
+    "features": {
+      "ghcr.io/MartinAskestad/features/mingw:1": {},
+      "ghcr.io/devcontainers/features/git:1": {}
+      },
+      "customizations": {
+      "vscode": {
+        "extensions": [
+          "ms-vscode.cpptools"
+        ]
+      }
+    }
+  }
