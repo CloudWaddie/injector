@@ -169,14 +169,14 @@ BOOL InjectDLL(DWORD processId, const wchar_t* dllPath) {
         return FALSE;
     }
 
-    DWORD waitResult = WaitForSingleObject(hThread, 5000); // 5 second timeout
-    if (waitResult != WAIT_OBJECT_0) {
-        wprintf(L"WaitForSingleObject failed or timed out: %d\n", waitResult);
-        CloseHandle(hThread);
-        VirtualFreeEx(hProcess, remoteString, 0, MEM_RELEASE);
-        CloseHandle(hProcess);
-        return FALSE;
-    }
+    // DWORD waitResult = WaitForSingleObject(hThread, 5000); // 5 second timeout
+    // if (waitResult != WAIT_OBJECT_0) {
+    //     wprintf(L"WaitForSingleObject failed or timed out: %d\n", waitResult);
+    //     CloseHandle(hThread);
+    //     VirtualFreeEx(hProcess, remoteString, 0, MEM_RELEASE);
+    //     CloseHandle(hProcess);
+    //     return FALSE;
+    // }
 
     DWORD exitCode = 0;
     if (GetExitCodeThread(hThread, &exitCode)) {
