@@ -23,7 +23,6 @@ DWORD GetProcessIdByName(const wchar_t* processName) {
     }
 
     do {
-        wprintf(L"Checking process: %ls\n", pe32.szExeFile);
         if (_wcsicmp(pe32.szExeFile, processName) == 0) {
             DWORD pid = pe32.th32ProcessID;
             CloseHandle(hSnapshot);
@@ -35,7 +34,7 @@ DWORD GetProcessIdByName(const wchar_t* processName) {
     return 0;
 }
 
-BOOL SetAccessControl(const wchar_t* ExecutableName) {
+BOOL SetAccessControl(const wchar_t* filePath) {
     PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
     EXPLICIT_ACCESSW ExplicitAccess = { 0 };
     ACL* AccessControlCurrent = NULL;
@@ -46,7 +45,7 @@ BOOL SetAccessControl(const wchar_t* ExecutableName) {
 
     // Get current DACL
     if (GetNamedSecurityInfoW(
-            ExecutableName,
+            filePath,
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION,
             NULL,
@@ -55,7 +54,7 @@ BOOL SetAccessControl(const wchar_t* ExecutableName) {
             NULL,
             &SecurityDescriptor) == ERROR_SUCCESS) {
         
-        // Convert "ALL APPLICATION PACKAGES" SID string to SID
+        // Convert "ALL APPLICATION PACKAGES" SID string to SID.  This is for demonstration purposes only.  In a real-world scenario, you would likely use a more appropriate SID.
         if (ConvertStringSidToSidW(L"S-1-15-2-1", &SecurityIdentifier)) {
             ExplicitAccess.grfAccessPermissions = GENERIC_READ | GENERIC_EXECUTE;
             ExplicitAccess.grfAccessMode = SET_ACCESS;
@@ -68,7 +67,7 @@ BOOL SetAccessControl(const wchar_t* ExecutableName) {
             if (SetEntriesInAclW(1, &ExplicitAccess, AccessControlCurrent, &AccessControlNew) == ERROR_SUCCESS) {
                 // Set new DACL
                 success = SetNamedSecurityInfoW(
-                    (LPWSTR)ExecutableName,
+                    (LPWSTR)filePath,
                     SE_FILE_OBJECT,
                     SecurityInfo,
                     NULL,
@@ -95,7 +94,7 @@ BOOL SetAccessControl(const wchar_t* ExecutableName) {
 
 BOOL InjectDLL(DWORD processId, const wchar_t* dllPath) {
     // Convert relative path to absolute if needed
-    wchar_t fullPath[MAX_PATH];
+    wchar_t fullPath[MAX_PATH] = {0};
     if (!GetFullPathNameW(dllPath, MAX_PATH, fullPath, NULL)) {
         wprintf(L"GetFullPathNameW failed: %d\n", GetLastError());
         return FALSE;
@@ -104,7 +103,7 @@ BOOL InjectDLL(DWORD processId, const wchar_t* dllPath) {
     // Set proper access controls for the DLL
     wprintf(L"Setting DLL access permissions...\n");
     if (!SetAccessControl(fullPath)) {
-        wprintf(L"Warning: Failed to set DLL access permissions: %d\n", GetLastError());
+        wprintf(L"Warning: Failed to set DLL access permissions. Error: %lu\n", GetLastError());
         // Continue anyway as it might work without it
     }
     
@@ -121,7 +120,7 @@ BOOL InjectDLL(DWORD processId, const wchar_t* dllPath) {
         return FALSE;
     }
 
-    SIZE_T pathLen = (wcslen(fullPath) + 1) * sizeof(wchar_t);
+    SIZE_T pathLen = wcslen(fullPath) * sizeof(wchar_t) + sizeof(wchar_t); // Include null terminator
     wprintf(L"Attempting to inject: %ls (size: %zu bytes)\n", fullPath, pathLen);
 
     LPVOID remoteString = VirtualAllocEx(hProcess, NULL, 
@@ -181,7 +180,7 @@ BOOL InjectDLL(DWORD processId, const wchar_t* dllPath) {
 
     DWORD exitCode = 0;
     if (GetExitCodeThread(hThread, &exitCode)) {
-        wprintf(L"Thread exit code: %d (0x%08X)\n", exitCode, exitCode);
+        wprintf(L"Thread exit code: %lu (0x%08lX)\n", exitCode, exitCode);
         if (exitCode == 0) {
             wprintf(L"LoadLibrary failed in target process\n");
         }
@@ -207,8 +206,8 @@ int wmain(int argc, wchar_t* argv[]) {
         return 1;
     }
 
-    wchar_t targetProcessName[MAX_PATH];
-    wchar_t dllPath[MAX_PATH];
+    wchar_t targetProcessName[MAX_PATH] = {0};
+    wchar_t dllPath[MAX_PATH] = {0};
 
     wcscpy_s(targetProcessName, MAX_PATH, argv[1]);
     wcscpy_s(dllPath, MAX_PATH, argv[2]);
@@ -226,7 +225,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
     wprintf(L"Found process %ls with PID: %d\n", targetProcessName, processId);
 
-    if (InjectDLL(processId, dllPath)) {
+    if (InjectDLL(processId, dllPath) ) {
         wprintf(L"DLL injected successfully! Name: %ls\n", dllPath);
         return 0;
     } else {
