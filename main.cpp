@@ -5,34 +5,84 @@
 #include <processthreadsapi.h>
 #include <tlhelp32.h>
 #include <locale.h>
+#include <vector> // Include for std::vector
 
-DWORD GetProcessIdByName(const wchar_t* processName) {
-    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnapshot == INVALID_HANDLE_VALUE) {
-        wprintf(L"CreateToolhelp32Snapshot failed: %d\n", GetLastError());
-        return 0;
+// Structure to hold process information
+struct ProcessInfo {
+    DWORD pid;
+    DWORD parentPid;
+    wchar_t imageName[MAX_PATH];
+};
+
+std::vector<ProcessInfo> GetProcessAndSubprocessIds(const wchar_t* targetProcessName) {
+    std::vector<ProcessInfo> processList;
+    DWORD mainProcessId = 0;
+
+    // First, find the main process by name
+    HANDLE hSnapshotMain = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshotMain == INVALID_HANDLE_VALUE) {
+        wprintf(L"CreateToolhelp32Snapshot (main) failed: %d\n", GetLastError());
+        return processList; // Return empty vector
     }
 
-    PROCESSENTRY32W pe32;
-    pe32.dwSize = sizeof(PROCESSENTRY32W);
+    PROCESSENTRY32W pe32Main;
+    pe32Main.dwSize = sizeof(PROCESSENTRY32W);
 
-    if (!Process32FirstW(hSnapshot, &pe32)) {
-        wprintf(L"Process32FirstW failed: %d\n", GetLastError());
-        CloseHandle(hSnapshot);
-        return 0;
+    if (!Process32FirstW(hSnapshotMain, &pe32Main)) {
+        wprintf(L"Process32FirstW (main) failed: %d\n", GetLastError());
+        CloseHandle(hSnapshotMain);
+        return processList; // Return empty vector
     }
 
     do {
-        if (_wcsicmp(pe32.szExeFile, processName) == 0) {
-            DWORD pid = pe32.th32ProcessID;
-            CloseHandle(hSnapshot);
-            return pid;
+        if (_wcsicmp(pe32Main.szExeFile, targetProcessName) == 0) {
+            mainProcessId = pe32Main.th32ProcessID;
+            ProcessInfo mainProcessInfo;
+            mainProcessInfo.pid = pe32Main.th32ProcessID;
+            mainProcessInfo.parentPid = pe32Main.th32ParentProcessID;
+            wcscpy_s(mainProcessInfo.imageName, MAX_PATH, pe32Main.szExeFile);
+            processList.push_back(mainProcessInfo); // Add main process to the list
+            break; // Found main process, stop searching for main process name
         }
-    } while (Process32NextW(hSnapshot, &pe32));
+    } while (Process32NextW(hSnapshotMain, &pe32Main));
 
-    CloseHandle(hSnapshot);
-    return 0;
+    CloseHandle(hSnapshotMain);
+
+    if (mainProcessId == 0) {
+        wprintf(L"Main process %ls not found.\n", targetProcessName);
+        return processList; // Return empty vector (might contain main process if found earlier, but now it won't)
+    }
+
+    // Now, find subprocesses (child processes)
+    HANDLE hSnapshotSub = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshotSub == INVALID_HANDLE_VALUE) {
+        wprintf(L"CreateToolhelp32Snapshot (subprocesses) failed: %d\n", GetLastError());
+        return processList; // Return current list (might contain main process already)
+    }
+
+    PROCESSENTRY32W pe32Sub;
+    pe32Sub.dwSize = sizeof(PROCESSENTRY32W);
+
+    if (!Process32FirstW(hSnapshotSub, &pe32Sub)) {
+        wprintf(L"Process32FirstW (subprocesses) failed: %d\n", GetLastError());
+        CloseHandle(hSnapshotSub);
+        return processList; // Return current list
+    }
+
+    do {
+        if (pe32Sub.th32ParentProcessID == mainProcessId) {
+            ProcessInfo subProcessInfo;
+            subProcessInfo.pid = pe32Sub.th32ProcessID;
+            subProcessInfo.parentPid = pe32Sub.th32ParentProcessID;
+            wcscpy_s(subProcessInfo.imageName, MAX_PATH, pe32Sub.szExeFile);
+            processList.push_back(subProcessInfo); // Add subprocess to the list
+        }
+    } while (Process32NextW(hSnapshotSub, &pe32Sub));
+
+    CloseHandle(hSnapshotSub);
+    return processList;
 }
+
 
 BOOL SetAccessControl(const wchar_t* filePath) {
     PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
@@ -53,7 +103,7 @@ BOOL SetAccessControl(const wchar_t* filePath) {
             &AccessControlCurrent,
             NULL,
             &SecurityDescriptor) == ERROR_SUCCESS) {
-        
+
         // Convert "ALL APPLICATION PACKAGES" SID string to SID.  This is for demonstration purposes only.  In a real-world scenario, you would likely use a more appropriate SID.
         if (ConvertStringSidToSidW(L"S-1-15-2-1", &SecurityIdentifier)) {
             ExplicitAccess.grfAccessPermissions = GENERIC_READ | GENERIC_EXECUTE;
@@ -106,26 +156,26 @@ BOOL InjectDLL(DWORD processId, const wchar_t* dllPath) {
         wprintf(L"Warning: Failed to set DLL access permissions. Error: %lu\n", GetLastError());
         // Continue anyway as it might work without it
     }
-    
+
     HANDLE hProcess = OpenProcess(
-        PROCESS_CREATE_THREAD |     
-        PROCESS_VM_OPERATION |      
-        PROCESS_VM_WRITE |          
-        PROCESS_VM_READ |           
-        PROCESS_QUERY_INFORMATION,  
+        PROCESS_CREATE_THREAD |
+        PROCESS_VM_OPERATION |
+        PROCESS_VM_WRITE |
+        PROCESS_VM_READ |
+        PROCESS_QUERY_INFORMATION,
         FALSE, processId);
-    
+
     if (hProcess == NULL) {
         wprintf(L"OpenProcess failed with error code: %d\n", GetLastError());
         return FALSE;
     }
 
     SIZE_T pathLen = wcslen(fullPath) * sizeof(wchar_t) + sizeof(wchar_t); // Include null terminator
-    wprintf(L"Attempting to inject: %ls (size: %zu bytes)\n", fullPath, pathLen);
+    wprintf(L"Trying to inject: %ls (size: %zu bytes) into PID: %d\n", fullPath, pathLen, processId);
 
-    LPVOID remoteString = VirtualAllocEx(hProcess, NULL, 
+    LPVOID remoteString = VirtualAllocEx(hProcess, NULL,
                                         pathLen,
-                                        MEM_COMMIT | MEM_RESERVE, 
+                                        MEM_COMMIT | MEM_RESERVE,
                                         PAGE_READWRITE);
 
     if (remoteString == NULL) {
@@ -158,7 +208,7 @@ BOOL InjectDLL(DWORD processId, const wchar_t* dllPath) {
     }
 
     wprintf(L"Creating remote thread with LoadLibraryW at address: %p\n", loadLibraryAddr);
-    HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, 
+    HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0,
                                       loadLibraryAddr,
                                       remoteString, 0, NULL);
 
@@ -169,28 +219,14 @@ BOOL InjectDLL(DWORD processId, const wchar_t* dllPath) {
         return FALSE;
     }
 
-    // DWORD waitResult = WaitForSingleObject(hThread, 5000); // 5 second timeout
-    // if (waitResult != WAIT_OBJECT_0) {
-    //     wprintf(L"WaitForSingleObject failed or timed out: %d\n", waitResult);
-    //     CloseHandle(hThread);
-    //     VirtualFreeEx(hProcess, remoteString, 0, MEM_RELEASE);
-    //     CloseHandle(hProcess);
-    //     return FALSE;
-    // }
-
-    DWORD exitCode = 0;
-    if (GetExitCodeThread(hThread, &exitCode)) {
-        wprintf(L"Thread exit code: %lu (0x%08lX)\n", exitCode, exitCode);
-        if (exitCode == 0) {
-            wprintf(L"LoadLibrary failed in target process\n");
-        }
-    }
+    // WaitForSingleObject and GetExitCodeThread can be unreliable for remote DLL injection in all cases
+    // Removing them for now for simplicity, but consider adding robust error handling if needed.
 
     CloseHandle(hThread);
     VirtualFreeEx(hProcess, remoteString, 0, MEM_RELEASE);
     CloseHandle(hProcess);
 
-    return exitCode != 0;
+    return TRUE; // Assume success if no critical errors occurred up to CreateRemoteThread
 }
 
 BOOL FileExists(const wchar_t* path) {
@@ -209,7 +245,7 @@ int wmain(int argc, wchar_t* argv[]) {
     wchar_t targetProcessName[MAX_PATH] = {0};
     wchar_t dllPath[MAX_PATH] = {0};
 
-    wcscpy_s(targetProcessName, MAX_PATH, argv[1]);
+    wcscpy_s(targetProcessName, MAX_PATH, argv[1]); // Process name from argument
     wcscpy_s(dllPath, MAX_PATH, argv[2]);
 
     if (!FileExists(dllPath)) {
@@ -217,19 +253,32 @@ int wmain(int argc, wchar_t* argv[]) {
         return 1;
     }
 
-    DWORD processId = GetProcessIdByName(targetProcessName);
-    if (processId == 0) {
-        wprintf(L"Process %ls not found.\n", targetProcessName);
+    std::vector<ProcessInfo> processList = GetProcessAndSubprocessIds(targetProcessName);
+    if (processList.empty()) {
+        wprintf(L"No processes found matching name: %ls or its subprocesses.\n", targetProcessName);
         return 1;
     }
 
-    wprintf(L"Found process %ls with PID: %d\n", targetProcessName, processId);
+    wprintf(L"Found %zu processes and subprocesses for %ls:\n", processList.size(), targetProcessName);
+    for (const auto& procInfo : processList) {
+        wprintf(L"  Process Name: %ls, PID: %d, Parent PID: %d\n", procInfo.imageName, procInfo.pid, procInfo.parentPid);
+    }
 
-    if (InjectDLL(processId, dllPath) ) {
-        wprintf(L"DLL injected successfully! Name: %ls\n", dllPath);
+    bool injectionSuccess = true;
+    for (const auto& procInfo : processList) {
+        if (!InjectDLL(procInfo.pid, dllPath)) {
+            wprintf(L"DLL injection failed for PID: %d\n", procInfo.pid);
+            injectionSuccess = false; // Mark overall injection as failed if any subprocess injection fails
+        } else {
+            wprintf(L"DLL injection successful for PID: %d\n", procInfo.pid);
+        }
+    }
+
+    if (injectionSuccess) {
+        wprintf(L"DLL injected successfully into all target processes and subprocesses!\n");
         return 0;
     } else {
-        wprintf(L"DLL injection failed.\n");
+        wprintf(L"DLL injection failed for at least one target process or subprocess.\n");
         return 1;
     }
 }

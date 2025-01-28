@@ -1,6 +1,6 @@
 # injector
 DLL Injector
-x86_64-w64-mingw32-gcc main.c -o main.exe -municode
+x86_64-w64-mingw32-g++ main.cpp -o injector64.exe -municode
 
 Features:
 🛡  - Does not trigger AV
